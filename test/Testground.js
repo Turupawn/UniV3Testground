@@ -81,30 +81,36 @@ describe("Lock", function () {
         token1 = v3Token.address
       }
 
+      /*
       await nonfungiblePositionManager.createAndInitializePoolIfNecessary(
         token0,
         token1,
-        3000/* fee */,
+        3000.// fee
         calculateSqrtPriceX96(1, 18, 18).toFixed(0)//Math.sqrt("1") * 2 ** 96
       )
+      */
       console.log()
 
       console.log("Preparing to add liquidity")
+      console.log("Pool1: " + await v3Token.pool1())
+      console.log("Pool2: " + await v3Token.pool2())
+      console.log("Pool3: " + await v3Token.pool3())
+      console.log("Pool4: " + await v3Token.pool4())
 
-      console.log("WTFWT")
+      console.log("We initialize the pool")
       const pool = await hre.ethers.getContractAt(
-        "IUniswapV3Pool", "0x467882afccb30d7bc7f1138ec350258d96fba1cb"
+        "IUniswapV3Pool", await v3Token.pool4()
       );
 
+      console.log("Adding liquidity requires a series of params")
       let slot0 = await pool.slot0()
-      console.log("b")
       let tickSpacing = parseInt(await pool.tickSpacing())
       let nearestTick = getNearestUsableTick(parseInt(slot0.tick),tickSpacing)
 
       mintParams = {
           token0: token0,
           token1: token1,
-          fee: 3000,
+          fee: await pool.fee(),
           tickLower: nearestTick - tickSpacing * 10,
           tickUpper: nearestTick + tickSpacing * 10,
           amount0Desired: ethers.utils.parseEther("1"),
@@ -126,15 +132,16 @@ describe("Lock", function () {
 
       console.log("Deplyer balance: " + ethers.utils.formatEther(await v3Token.balanceOf(deployer.address)))
       console.log()
+      console.log("Fee balance: " + ethers.utils.formatEther(await v3Token.balanceOf(v3Token.address)))
 
       console.log("Now we can swap")
       swapParams = {
           tokenIn: weth.address,
           tokenOut: v3Token.address,
-          fee: "3000",
+          fee: await pool.fee(),
           recipient: user1.address,
           deadline: "2662503213",
-          amountIn: ethers.utils.parseEther("0.01"),
+          amountIn: ethers.utils.parseEther("0.1"),
           amountOutMinimum: 0,
           sqrtPriceLimitX96: 0
       }
@@ -142,7 +149,61 @@ describe("Lock", function () {
       await weth.connect(user1).approve(router.address, ethers.utils.parseEther("10"))
       await router.connect(user1).exactInputSingle(swapParams)
 
+console.log("User v3Token balance: " + ethers.utils.formatEther(await v3Token.balanceOf(user1.address)))
+
+console.log("-----SELL-----")
+      swapParams2 = {
+        tokenIn: v3Token.address,
+        tokenOut: weth.address,
+        fee: await pool.fee(),
+        recipient: user1.address,
+        deadline: "2662503213",
+        amountIn: ethers.utils.parseEther("0.00001"),
+        amountOutMinimum: 0,
+        sqrtPriceLimitX96: 0
+    }
+
+    await v3Token.transfer(user2.address, ethers.utils.parseEther("100.0"))
+
+    await v3Token.connect(user2).approve(router.address, ethers.utils.parseEther("0.01"))
+    await v3Token.connect(deployer).approve(router.address, ethers.utils.parseEther("0.01"))
+    await router.connect(deployer).exactInputSingle(swapParams2)
+
+    console.log("pre")
+    await v3Token.swap()
+    console.log("post")
+    //await v3Token.liquidity()
+    console.log("posta")
+
+console.log(nearestTick - tickSpacing * 10)
+console.log(nearestTick + tickSpacing * 10)
+    mintParams = {
+      token0: token0,
+      token1: token1,
+      fee: await pool.fee(),
+      tickLower: nearestTick - tickSpacing * 10,
+      tickUpper: nearestTick + tickSpacing * 10,
+      amount0Desired: ethers.utils.parseEther("1"),
+      amount1Desired: ethers.utils.parseEther("1"),
+      amount0Min: 0,
+      amount1Min: 0,
+      recipient: deployer.address,
+      deadline: "2662503213"
+  };
+
+  console.log("We approve")
+  await v3Token.approve(nonfungiblePositionManager.address, ethers.utils.parseEther("10"))
+  await weth.approve(nonfungiblePositionManager.address, ethers.utils.parseEther("10"))
+  console.log("Now we add liquidity")
+  await nonfungiblePositionManager.connect(deployer).mint(
+    mintParams
+  );
+    
+
+
       console.log("User1 balance: " + ethers.utils.formatEther(await v3Token.balanceOf(user1.address)))
+      console.log("Fee balance: " + ethers.utils.formatEther(await v3Token.balanceOf(v3Token.address)))
+      console.log("Weth balance: " + ethers.utils.formatEther(await weth.balanceOf(v3Token.address)))
     });
   });
 });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.16;
+pragma solidity 0.8.17;
 
 abstract contract Context {
     function _msgSender() internal view virtual returns (address) {
@@ -86,6 +86,12 @@ interface IERC20 {
     event Approval(address indexed owner, address indexed spender, uint256 value);
 }
 
+interface IWETH is IERC20 {
+    function deposit() external payable;
+
+    function withdraw(uint amount) external;
+}
+
 interface IERC20Metadata is IERC20 {
     /**
      * @dev Returns the name of the token.
@@ -103,65 +109,141 @@ interface IERC20Metadata is IERC20 {
     function decimals() external view returns (uint8);
 }
 
-abstract contract Ownable is Context {
-    address private _owner;
-
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-
-    /**
-     * @dev Initializes the contract setting the deployer as the initial owner.
-     */
-    constructor() {
-        _transferOwnership(_msgSender());
-    }
-
-    /**
-     * @dev Returns the address of the current owner.
-     */
-    function owner() public view virtual returns (address) {
-        return _owner;
-    }
-
-    /**
-     * @dev Throws if called by any account other than the owner.
-     */
-    modifier onlyOwner() {
-        require(owner() == _msgSender(), "Ownable: caller is not the owner");
-        _;
-    }
-
-    /**
-     * @dev Leaves the contract without owner. It will not be possible to call
-     * `onlyOwner` functions anymore. Can only be called by the current owner.
-     *
-     * NOTE: Renouncing ownership will leave the contract without an owner,
-     * thereby removing any functionality that is only available to the owner.
-     */
-    function renounceOwnership() public virtual onlyOwner {
-        _transferOwnership(address(0));
-    }
-
-    /**
-     * @dev Transfers ownership of the contract to a new account (`newOwner`).
-     * Can only be called by the current owner.
-     */
-    function transferOwnership(address newOwner) public virtual onlyOwner {
-        require(newOwner != address(0), "Ownable: new owner is the zero address");
-        _transferOwnership(newOwner);
-    }
-
-    /**
-     * @dev Transfers ownership of the contract to a new account (`newOwner`).
-     * Internal function without access restriction.
-     */
-    function _transferOwnership(address newOwner) internal virtual {
-        address oldOwner = _owner;
-        _owner = newOwner;
-        emit OwnershipTransferred(oldOwner, newOwner);
-    }
+struct ExactInputSingleParams {
+    address tokenIn;
+    address tokenOut;
+    uint24 fee;
+    address recipient;
+    uint deadline;
+    uint amountIn;
+    uint amountOutMinimum;
+    uint160 sqrtPriceLimitX96;
 }
 
-contract V3Token is Context, IERC20, IERC20Metadata, Ownable {
+interface ISwapRouter {
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external
+        payable
+        returns (uint amountOut);
+}
+
+interface INonfungiblePositionManager {
+
+    function createAndInitializePoolIfNecessary(
+        address token0,
+        address token1,
+        uint24 fee,
+        uint160 sqrtPriceX96
+    ) external payable returns (address pool);
+
+    struct MintParams {
+        address token0;
+        address token1;
+        uint24 fee;
+        int24 tickLower;
+        int24 tickUpper;
+        uint amount0Desired;
+        uint amount1Desired;
+        uint amount0Min;
+        uint amount1Min;
+        address recipient;
+        uint deadline;
+    }
+
+    function mint(MintParams calldata params)
+        external
+        payable
+        returns (
+            uint tokenId,
+            uint128 liquidity,
+            uint amount0,
+            uint amount1
+        );
+
+    struct IncreaseLiquidityParams {
+        uint tokenId;
+        uint amount0Desired;
+        uint amount1Desired;
+        uint amount0Min;
+        uint amount1Min;
+        uint deadline;
+    }
+
+    function increaseLiquidity(IncreaseLiquidityParams calldata params)
+        external
+        payable
+        returns (
+            uint128 liquidity,
+            uint amount0,
+            uint amount1
+        );
+
+    struct DecreaseLiquidityParams {
+        uint tokenId;
+        uint128 liquidity;
+        uint amount0Min;
+        uint amount1Min;
+        uint deadline;
+    }
+
+    function decreaseLiquidity(DecreaseLiquidityParams calldata params)
+        external
+        payable
+        returns (uint amount0, uint amount1);
+
+    struct CollectParams {
+        uint tokenId;
+        address recipient;
+        uint128 amount0Max;
+        uint128 amount1Max;
+    }
+
+    function collect(CollectParams calldata params)
+        external
+        payable
+        returns (uint amount0, uint amount1);
+}
+
+abstract contract IUniswapV3Pool
+{
+    struct Slot0 {
+        // the current price
+        uint160 sqrtPriceX96;
+        // the current tick
+        int24 tick;
+        // the most-recently updated index of the observations array
+        uint16 observationIndex;
+        // the current maximum number of observations that are being stored
+        uint16 observationCardinality;
+        // the next maximum number of observations to store, triggered in observations.write
+        uint16 observationCardinalityNext;
+        // the current protocol fee as a percentage of the swap fee taken on withdrawal
+        // represented as an integer denominator (1/x)%
+        uint8 feeProtocol;
+        // whether the pool is locked
+        bool unlocked;
+    }
+    //Slot0 public slot0;
+
+    uint24 public fee;
+    //int24 public tickSpacing;
+
+
+    function slot0(
+    ) external virtual view returns 
+        (
+            uint160 sqrtPriceX96, 
+            int24 tick, 
+            uint16 observationIndex, 
+            uint16 observationCardinality, 
+            uint16 observationCardinalityNext, 
+            uint8 feeProtocol, 
+            bool unlocked);
+    
+    function tickSpacing() external virtual view returns (int24);
+}
+
+contract V3Fees is Context, IERC20, IERC20Metadata {
     mapping(address => uint256) private _balances;
 
     mapping(address => mapping(address => uint256)) private _allowances;
@@ -171,10 +253,92 @@ contract V3Token is Context, IERC20, IERC20Metadata, Ownable {
     string private _name;
     string private _symbol;
 
+    // My variables
+    address public wethAddress;
+    address public pool1;
+    address public pool2;
+    address public pool3;
+    address public pool4;
+    INonfungiblePositionManager public nonfungiblePositionManager;
+
+    address public vaultWallet;
+
+    uint public _feeDecimal = 2;
+    uint public p2pFee;
+    uint public buyFee;
+
+    uint160 public borrame;
+
+    mapping(address => bool) public isTaxless;
+
     constructor(string memory pName, string memory pSymbol) {
         _name = pName;
         _symbol = pSymbol;
+
+        wethAddress = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+        vaultWallet = 0x707e55a12557E89915D121932F83dEeEf09E5d70;
+
+        p2pFee = 100; // 1% fee
+        buyFee = 200; // 2% fee
+
+        isTaxless[msg.sender] = true;
+        isTaxless[address(this)] = true;
+        isTaxless[vaultWallet] = true;
+        isTaxless[address(0)] = true;
+
         _mint(msg.sender, 1_000_000 ether);
+
+        nonfungiblePositionManager
+            = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
+
+        address token0;
+        address token1;
+        if(address(this) < wethAddress)
+        {
+            token0 = address(this);
+            token1 = wethAddress;
+        }else
+        {
+            token0 = wethAddress;
+            token1 = address(this);
+        }
+
+        uint160 RATE = 1000;
+        uint160 sqrtPriceX96;
+
+        if(token0 == wethAddress)
+        {
+            sqrtPriceX96 = uint160(sqrt(RATE)) * 2 ** 96;
+        }else
+        {
+            sqrtPriceX96 = (2 ** 96) / uint160(sqrt(RATE));
+        }
+        borrame = sqrtPriceX96;
+
+        pool1 = nonfungiblePositionManager.createAndInitializePoolIfNecessary(
+            token0,
+            token1,
+            100/* fee */,
+            sqrtPriceX96//Math.sqrt("1") * 2 ** 96
+        );
+        pool2 = nonfungiblePositionManager.createAndInitializePoolIfNecessary(
+            token0,
+            token1,
+            500/* fee */,
+            sqrtPriceX96//Math.sqrt("1") * 2 ** 96
+        );
+        pool3 = nonfungiblePositionManager.createAndInitializePoolIfNecessary(
+            token0,
+            token1,
+            3000/* fee */,
+            sqrtPriceX96//Math.sqrt("1") * 2 ** 96
+        );
+        pool4 = nonfungiblePositionManager.createAndInitializePoolIfNecessary(
+            token0,
+            token1,
+            10000/* fee */,
+            sqrtPriceX96//Math.sqrt("1") * 2 ** 96
+        );
     }
 
     function name() public view virtual override returns (string memory) {
@@ -250,6 +414,24 @@ contract V3Token is Context, IERC20, IERC20Metadata, Ownable {
         require(to != address(0), "ERC20: transfer to the zero address");
 
         _beforeTokenTransfer(from, to, amount);
+
+        // My implementation
+        uint256 feesCollected;
+        if (!isTaxless[from] && !isTaxless[to]) {
+            if(isPool(from))
+            {
+                feesCollected = (amount * buyFee) / (10**(_feeDecimal + 2));
+            }else if(!isPool(to))
+            {
+                feesCollected = (amount * p2pFee) / (10**(_feeDecimal + 2));
+            }
+        }
+
+        amount -= feesCollected;
+        _balances[from] -= feesCollected;
+        _balances[vaultWallet] += feesCollected;
+
+        // End my implementation
 
         uint256 fromBalance = _balances[from];
         require(fromBalance >= amount, "ERC20: transfer amount exceeds balance");
@@ -329,4 +511,26 @@ contract V3Token is Context, IERC20, IERC20Metadata, Ownable {
         address to,
         uint256 amount
     ) internal virtual {}
+
+    // My functions
+    function isPool(address _address) public view returns(bool)
+    {
+        return _address == pool1 || _address == pool2 || _address == pool3 || _address == pool4;
+    }
+
+    function sqrt(uint y) internal pure returns (uint z) {
+        if (y > 3) {
+            z = y;
+            uint x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+            }
+        } else if (y != 0) {
+            z = 1;
+        }
+    }
+
+    fallback() external payable {}
+    receive() external payable {}
 }
